@@ -1,0 +1,102 @@
+import RPi.GPIO as GPIO
+import paho.mqtt.client as paho
+import json
+import time
+import serial
+import string
+import pynmea2
+
+GPIO.setmode(GPIO.BCM)
+
+TRIG = 23
+ECHO = 24 
+MOTION_SENSOR = 18  # Sensor PIR terhubung ke GPIO 18
+
+broker = "industrial.api.ubidots.com"
+portMqtt = 1883
+username = 'BBFF-9YiE1YxzdjSm0XGKABjCb4t9W2zbVR'
+password = ''
+timeout = 60
+
+publish = "/v2.0/devices/sweetunicorn"
+
+port="/dev/ttyAMA0"
+
+def Measure_distance():
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(TRIG, GPIO.OUT)
+    GPIO.setup(ECHO, GPIO.IN)
+    GPIO.output(TRIG, False)
+    print("Waiting For Sensor To Settle")
+    time.sleep(2)
+
+    GPIO.output(TRIG, True)
+    time.sleep(0.00001)
+    GPIO.output(TRIG, False)
+
+    while GPIO.input(ECHO) == 0:
+        pulse_start = time.time()
+
+    while GPIO.input(ECHO) == 1:
+        pulse_end = time.time()
+
+    pulse_duration = pulse_end - pulse_start
+    distance = pulse_duration * 17150
+    distance = round(distance, 10)
+    print("Ultrasonic Sensor Distance:", distance, "Cm")
+    return distance
+
+def get_gps_data():
+    latitude = -8.1858694
+    longitude = 113.6724784
+    ser=serial.Serial(port, baudrate=9600, timeout=0.5)
+    dataout = pynmea2.NMEAStreamReader()
+    newdata=ser.readline()
+    if newdata[0:6] == "$GPRMC":
+        newmsg=pynmea2.parse(newdata)
+        latitude=newmsg.latitude
+        longitude=newmsg.longitude
+        gps = "Latitude=" + str(latitude) + "dan Longitude=" + str(longitude)
+        print("GPS Data:", gps)
+    return latitude, longitude
+
+def on_connect(client, userdata, flags, rc):
+    print("Connected with result code " + str(rc))
+
+def on_publish(client, userdata, result):
+    print("Data published")
+
+def getPirSensor():
+    ret = 0
+    if GPIO.input(MOTION_SENSOR):
+        ret =1
+    print("PIR Sensor Status:", ret)
+    return ret
+
+def send_data():
+    GPIO.setup(MOTION_SENSOR, GPIO.IN)
+    client = paho.Client("sweetunicorn")
+    client.username_pw_set(username=username, password=password)
+    client.on_connect = on_connect
+    client.on_publish = on_publish
+    client.connect(broker, portMqtt, timeout)
+    while True:
+        sensor1 = Measure_distance()
+        sensor2 = getPirSensor()
+        latitude, longitude = get_gps_data()
+       
+        json_temp = {
+            'ultrasonik': sensor1,
+            'pir': sensor2,
+            "position": {
+                "value": 0,
+                "context": {"lat": latitude, "lng": longitude}
+            }
+        }
+        payload = json.dumps(json_temp, indent=4)
+        client.publish(publish, payload, qos=1)
+        print("Data Sent:", payload)
+        time.sleep(20)
+
+send_data()
